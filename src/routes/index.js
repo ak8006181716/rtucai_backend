@@ -2,6 +2,7 @@ import express from 'express';
 import authRoutes from './authRoutes.js';
 import missionRoutes from './missionRoutes.js';
 import complaintRoutes from './complaintRoutes.js';
+import chatRoutes from './chatRoutes.js';
 
 const router = express.Router();
 
@@ -22,5 +23,8 @@ router.use('/mission', missionRoutes);
 
 // Complaint Routes
 router.use('/complaints', complaintRoutes);
+
+// Chat (AI Chatbot) Routes
+router.use('/chat', chatRoutes);
 
 export default router;

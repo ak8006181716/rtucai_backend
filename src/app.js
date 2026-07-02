@@ -7,11 +7,11 @@ const app = express();
 
 // Configure CORS
 app.use(cors({
-  origin: ['http://127.0.0.1:5500', 'http://localhost:5500','https://rtucai.com','https://www.rtucai.com'],
+  origin: ['http://127.0.0.1:5500', 'http://localhost:5500', 'https://rtucai.com', 'https://www.rtucai.com', 'https://rtuai.vercel.app', 'https://www.rtuai.vercel.app', 'http://localhost:3000', 'https://rtu-ai-frontend-git-main-ankit-projects-62459343.vercel.app', 'https://rtu-ai-frontend.vercel.app'],
   credentials: true
 }));
 
-// Standard middlewares
+// Standard middlewares 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
