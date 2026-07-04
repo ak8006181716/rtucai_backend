@@ -45,6 +45,7 @@ Your role is to assist Indian citizens by making complex information simple, und
 ## Behavior Guidelines
 - Always respond in a friendly, helpful, and professional tone.
 - Use simple, clear language — avoid jargon.
+- **NO MARKDOWN / NO ASTERISKS**: Do NOT use asterisks (*) or double asterisks (**) in your responses under any circumstances. Never use markdown for headers, bold text, or bullet lists. If you need to write lists, use numbers (1., 2., 3.) or simple hyphens (-) instead of asterisks. Use standard line breaks (newlines) to separate sections, paragraphs, and list items.
 - **General Queries**: You are a fully-capable AI model. If the user asks a general question (e.g., about coding, science, mathematics, literature, history, general advice, etc.) that is unrelated to RTUCAI or consumer rights, answer it directly, fully, and accurately.
 - **Avoid Website Centricity**: Do NOT force mentions of RTUCAI, website links (https://rtuai.vercel.app...), contact details (ig@rtucai.com / phone numbers), or specific initiatives into your responses unless the user's query is explicitly about RTUCAI, consumer rights in India, or related services. If they ask a general question, answer it directly without any website-centric preamble or links.
 - When answering questions about banking, insurance, housing, telecom, e-commerce, government schemes, or citizen rights, provide accurate and easy-to-understand guidance.
@@ -67,6 +68,21 @@ const getGenAIClient = () => {
     genAI = new GoogleGenerativeAI(apiKey);
   }
   return genAI;
+};
+
+/**
+ * Sanitizes the AI response to ensure no asterisks are present.
+ * Converts markdown bullet points starting with '*' to '-' and strips all bold/italic asterisks.
+ */
+const sanitizeResponse = (text) => {
+  if (typeof text !== 'string') return text;
+  return text
+    // Replace bullet points starting with '*' or '* ' at the beginning of a line or after a newline with a simple dash '-'
+    .replace(/(^|\n)\s*\*\s+/g, '$1- ')
+    // Remove all remaining asterisks (bold, italic, or loose asterisks)
+    .replace(/\*/g, '')
+    // Clean up any double spaces that might have been left over
+    .replace(/ {2,}/g, ' ');
 };
 
 /**
@@ -105,7 +121,7 @@ export const chat = async (req, res) => {
       });
     }
 
-    // Sanitize history — only keep valid entries
+    // Sanitize history — only keep valid entries and strip asterisks from previous model replies
     const sanitizedHistory = history
       .filter(
         (entry) =>
@@ -115,6 +131,15 @@ export const chat = async (req, res) => {
           entry.parts.length > 0 &&
           typeof entry.parts[0].text === 'string'
       )
+      .map((entry) => {
+        if (entry.role === 'model') {
+          return {
+            ...entry,
+            parts: [{ ...entry.parts[0], text: sanitizeResponse(entry.parts[0].text) }]
+          };
+        }
+        return entry;
+      })
       .slice(-20); // Keep only last 20 messages for performance
 
     // ─── Send Message with Fallback Models & Retry Loop ───────────
@@ -195,17 +220,19 @@ export const chat = async (req, res) => {
       throw new Error('All candidate models failed to generate a response.');
     }
 
+    const cleanedResponseText = sanitizeResponse(responseText);
+
     logger.info(`Chat response generated successfully using model: ${workingModel}`);
 
     return res.status(200).json({
       success: true,
       data: {
-        reply: responseText,
+        reply: cleanedResponseText,
         // Return updated history for the client to maintain conversation context
         history: [
           ...sanitizedHistory,
           { role: 'user', parts: [{ text: trimmedMessage }] },
-          { role: 'model', parts: [{ text: responseText }] },
+          { role: 'model', parts: [{ text: cleanedResponseText }] },
         ],
       },
     });
