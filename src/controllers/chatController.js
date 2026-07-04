@@ -1,4 +1,5 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import jwt from 'jsonwebtoken';
+import ChatLog from '../models/ChatLog.js';
 import logger from '../utils/logger.js';
 
 // ─── RTUCAI System Context ─────────────────────────────────────────────────
@@ -56,20 +57,6 @@ Your role is to assist Indian citizens by making complex information simple, und
 - If you're unsure about a specific detail, say so honestly and direct the user to the contact page.
 - Do NOT provide specific legal advice — recommend consulting a qualified professional for legal matters.`;
 
-// ─── Initialize Gemini Client Client ─────────────────────────────────────────
-let genAI;
-
-const getGenAIClient = () => {
-  if (!genAI) {
-    const apiKey = process.env.new_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error('No Gemini API key found. Set new_GEMINI_API_KEY or GEMINI_API_KEY in .env.');
-    }
-    genAI = new GoogleGenerativeAI(apiKey);
-  }
-  return genAI;
-};
-
 /**
  * Sanitizes the AI response to ensure no asterisks are present.
  * Converts markdown bullet points starting with '*' to '-' and strips all bold/italic asterisks.
@@ -83,6 +70,25 @@ const sanitizeResponse = (text) => {
     .replace(/\*/g, '')
     // Clean up any double spaces that might have been left over
     .replace(/ {2,}/g, ' ');
+};
+
+/**
+ * Maps the Gemini-formatted history array to the messages array expected by OpenAI's chat completion API.
+ */
+const mapHistoryToOpenAIMessages = (sanitizedHistory, systemPrompt, currentMessage) => {
+  const messages = [
+    { role: 'system', content: systemPrompt }
+  ];
+
+  for (const entry of sanitizedHistory) {
+    const role = entry.role === 'model' ? 'assistant' : 'user';
+    const content = entry.parts[0].text;
+    messages.push({ role, content });
+  }
+
+  messages.push({ role: 'user', content: currentMessage });
+
+  return messages;
 };
 
 /**
@@ -142,76 +148,64 @@ export const chat = async (req, res) => {
       })
       .slice(-20); // Keep only last 20 messages for performance
 
-    // ─── Send Message with Fallback Models & Retry Loop ───────────
-    const genAIClient = getGenAIClient();
-    const candidateModels = ['gemini-2.5-flash-lite', 'gemini-2.5-flash'];
+    // ─── Send Message with ChatGPT Model ──────────────────────────
+    const apiKey = process.env.CHATGPT_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({
+        success: false,
+        error: 'AI service configuration error. ChatGPT API key is missing.'
+      });
+    }
+
+    const messages = mapHistoryToOpenAIMessages(sanitizedHistory, RTUCAI_SYSTEM_PROMPT, trimmedMessage);
+    const candidateModels = ['gpt-5.5-mini', 'gpt-4o-mini'];
     let lastError;
     let responseText;
     let workingModel = '';
-    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-    logger.info(`Chat request received. Message length: ${trimmedMessage.length}`);
+    logger.info(`Chat request received. Sending to ChatGPT. Message length: ${trimmedMessage.length}`);
 
     for (const modelName of candidateModels) {
-      let attempts = 0;
-      const maxAttempts = 2; // Try each model up to 2 times
-
-      while (attempts < maxAttempts) {
-        try {
-          const chatModel = genAIClient.getGenerativeModel({
+      try {
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
             model: modelName,
-            systemInstruction: RTUCAI_SYSTEM_PROMPT,
-          });
+            messages,
+            temperature: 0.7,
+            max_tokens: 1024
+          })
+        });
 
-          const chatSession = chatModel.startChat({
-            history: sanitizedHistory,
-            generationConfig: {
-              maxOutputTokens: 1024,
-              temperature: 0.7,
-              topP: 0.9,
-              topK: 40,
-            },
-          });
+        const data = await response.json();
 
-          const result = await chatSession.sendMessage(trimmedMessage);
-          responseText = result.response.text();
-          workingModel = modelName;
-          break; // Success, stop retrying this model
-        } catch (err) {
-          lastError = err;
-          attempts++;
-          logger.warn(`Model ${modelName} (attempt ${attempts}/${maxAttempts}) failed. Error: ${err.message}`);
-
-          // If it's an API Key issue, abort immediately instead of retrying other models
-          const isApiKeyError =
-            err.message?.includes('API_KEY_INVALID') ||
-            err.message?.includes('API key') ||
-            err.errorDetails?.some?.((d) => d.reason === 'API_KEY_INVALID');
-
-          if (isApiKeyError) {
-            throw err;
-          }
-
-          // Check if the error is a transient rate-limit or overload (503/429)
-          const isTransientError =
-            err.status === 503 ||
-            err.status === 429 ||
-            err.message?.includes('503') ||
-            err.message?.includes('429') ||
-            err.message?.includes('high demand') ||
-            err.message?.includes('busy');
-
-          if (isTransientError && attempts < maxAttempts) {
-            logger.info(`Waiting 1s before retrying ${modelName}...`);
-            await wait(1000);
-          } else {
-            break; // Stop trying this model, proceed to the next one
-          }
+        if (!response.ok) {
+          throw new Error(data.error?.message || `HTTP error! status: ${response.status}`);
         }
-      }
 
-      if (responseText) {
-        break; // Success, stop trying other models
+        responseText = data.choices?.[0]?.message?.content;
+        if (responseText) {
+          workingModel = modelName;
+          break; // Success, break model loop
+        }
+      } catch (err) {
+        lastError = err;
+        logger.warn(`Model ${modelName} failed. Error: ${err.message}`);
+
+        // If it's an API Key/auth issue, stop retrying other models
+        const isAuthError =
+          err.message?.includes('invalid_api_key') ||
+          err.message?.includes('API key') ||
+          err.message?.includes('Unauthorized') ||
+          err.message?.includes('401');
+
+        if (isAuthError) {
+          throw err;
+        }
       }
     }
 
@@ -221,6 +215,35 @@ export const chat = async (req, res) => {
     }
 
     const cleanedResponseText = sanitizeResponse(responseText);
+
+    // ─── Save Chat Log to Database ─────────────────────────────────
+    try {
+      let userId = null;
+      if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+        try {
+          const token = req.headers.authorization.split(' ')[1];
+          const decoded = jwt.verify(token, process.env.JWT_SECRET);
+          userId = decoded.id;
+        } catch (err) {
+          // Token is invalid/expired, ignore for logging
+        }
+      }
+
+      const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
+      const userAgent = req.headers['user-agent'] || '';
+
+      await ChatLog.create({
+        user: userId,
+        message: trimmedMessage,
+        reply: cleanedResponseText,
+        model: workingModel,
+        ipAddress,
+        userAgent
+      });
+      logger.info('Chat log saved successfully.');
+    } catch (dbErr) {
+      logger.error('Failed to save chat log to database:', dbErr);
+    }
 
     logger.info(`Chat response generated successfully using model: ${workingModel}`);
 

@@ -45,3 +45,17 @@ export const protect = async (req, res, next) => {
     next(error);
   }
 };
+
+/**
+ * Middleware to restrict access to admin users only
+ */
+export const admin = (req, res, next) => {
+  if (req.user && req.user.role === 'admin') {
+    next();
+  } else {
+    const error = new Error('Not authorized as an admin.');
+    error.statusCode = 403;
+    next(error);
+  }
+};
+
