@@ -24,7 +24,7 @@ const UserSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ['user', 'admin'],
+      enum: ['user', 'member', 'admin'],
       default: 'user'
       // NOTE: 'admin' is never set via the register endpoint.
       // It is only assigned automatically by the server startup seeder.

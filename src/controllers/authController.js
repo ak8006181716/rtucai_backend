@@ -1,5 +1,6 @@
 import User from '../models/User.js';
 import Complaint from '../models/Complaint.js';
+import MissionMember from '../models/MissionMember.js';
 import jwt from 'jsonwebtoken';
 import logger from '../utils/logger.js';
 
@@ -37,12 +38,16 @@ export const registerUser = async (req, res, next) => {
       throw error;
     }
 
-    // Create user — role is always 'user', admin is seeded at server startup
+    // Check if the registering email is already approved as a mission member
+    const approvedMember = await MissionMember.findOne({ email, status: 'approved' });
+    const initialRole = approvedMember ? 'member' : 'user';
+
+    // Create user — admin is seeded at server startup
     const user = await User.create({
       name,
       email,
       password,
-      role: 'user'
+      role: initialRole
     });
 
     logger.info(`User registered successfully: ${email}`);

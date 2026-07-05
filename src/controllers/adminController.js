@@ -95,10 +95,10 @@ export const updateUserRole = async (req, res, next) => {
   try {
     const { role } = req.body;
 
-    if (!role || !['user', 'admin'].includes(role)) {
+    if (!role || !['user', 'member'].includes(role)) {
       return res.status(400).json({
         success: false,
-        error: 'Invalid or missing role. Must be "user" or "admin".'
+        error: 'Invalid or missing role. Must be "user" or "member".'
       });
     }
 
@@ -111,11 +111,11 @@ export const updateUserRole = async (req, res, next) => {
       });
     }
 
-    // Prevent demoting oneself
-    if (user._id.toString() === req.user._id.toString()) {
+    // Prevent demoting or modifying the seeded admin account
+    if (user.role === 'admin') {
       return res.status(400).json({
         success: false,
-        error: 'You cannot change your own admin role status.'
+        error: 'The administrator role is fixed and cannot be changed.'
       });
     }
 
@@ -338,6 +338,18 @@ export const updateMissionMemberStatus = async (req, res, next) => {
     member.status = status;
     await member.save();
 
+    // Sync with User role
+    const user = await User.findOne({ email: member.email });
+    if (user && user.role !== 'admin') {
+      if (status === 'approved') {
+        user.role = 'member';
+      } else {
+        user.role = 'user';
+      }
+      await user.save();
+      logger.info(`Synced user role to ${user.role} for email ${user.email} due to member status update to ${status}`);
+    }
+
     res.status(200).json({
       success: true,
       message: `Mission member signup status successfully updated to ${status}.`,
@@ -358,6 +370,14 @@ export const deleteMissionMember = async (req, res, next) => {
         success: false,
         error: 'Mission member registration not found'
       });
+    }
+
+    // Sync with User role (revert to user)
+    const user = await User.findOne({ email: member.email });
+    if (user && user.role === 'member') {
+      user.role = 'user';
+      await user.save();
+      logger.info(`Reverted user role to 'user' for email ${user.email} due to member registration deletion`);
     }
 
     await member.deleteOne();
@@ -388,6 +408,10 @@ export const getChatLogs = async (req, res, next) => {
 
     if (req.query.model) {
       query.model = req.query.model;
+    }
+
+    if (req.query.user) {
+      query.user = req.query.user === 'null' || req.query.user === 'guest' ? null : req.query.user;
     }
 
     const total = await ChatLog.countDocuments(query);

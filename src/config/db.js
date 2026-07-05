@@ -9,9 +9,7 @@ import User from '../models/User.js';
 export const connectDB = async () => {
   try {
     const dbUri = process.env.MONGO_URI || 'mongodb://localhost:27017/rtucai';
-    
     await mongoose.connect(dbUri);
-    
     logger.info('Database connection is successfully Connected.');
 
     // Seed default mission data if database is empty
